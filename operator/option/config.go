@@ -6,6 +6,7 @@ package option
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/spf13/viper"
@@ -31,6 +32,10 @@ const (
 
 	// DefaultProxyStreamIdleTimeoutSeconds is the default value for the proxy stream idle timeout
 	DefaultProxyStreamIdleTimeoutSeconds = 300
+
+	// MaxProxyUpstreamTCPUserTimeoutSeconds keeps the millisecond socket option
+	// within the Linux kernel's signed 32-bit integer limit.
+	MaxProxyUpstreamTCPUserTimeoutSeconds = 2147483
 )
 
 const (
@@ -172,6 +177,9 @@ const (
 
 	// ProxyIdleTimeoutSeconds is the idle timeout for proxy connections to upstream clusters
 	ProxyIdleTimeoutSeconds = "proxy-idle-timeout-seconds"
+
+	// ProxyUpstreamTCPUserTimeoutSeconds is the TCP user timeout for generated HTTP upstream clusters.
+	ProxyUpstreamTCPUserTimeoutSeconds = "proxy-upstream-tcp-user-timeout-seconds"
 
 	// ProxyStreamIdleTimeoutSeconds is the stream timeout for proxy connections to upstream clusters
 	ProxyStreamIdleTimeoutSeconds = "proxy-stream-idle-timeout-seconds"
@@ -365,6 +373,10 @@ type OperatorConfig struct {
 	// ProxyIdleTimeoutSeconds is the idle timeout for the proxy to upstream cluster
 	ProxyIdleTimeoutSeconds int
 
+	// ProxyUpstreamTCPUserTimeoutSeconds is the default TCP user timeout for
+	// generated HTTP upstream clusters. Zero leaves the socket option unset.
+	ProxyUpstreamTCPUserTimeoutSeconds int
+
 	// ProxyStreamIdleTimeoutSeconds is the stream idle timeout for the proxy to upstream cluster
 	ProxyStreamIdleTimeoutSeconds int
 
@@ -411,6 +423,14 @@ func (c *OperatorConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	c.LeaderElectionRetryPeriod = vp.GetDuration(LeaderElectionRetryPeriod)
 	c.EnableGatewayAPI = vp.GetBool(EnableGatewayAPI)
 	c.ProxyIdleTimeoutSeconds = vp.GetInt(ProxyIdleTimeoutSeconds)
+	c.ProxyUpstreamTCPUserTimeoutSeconds = 0
+	if vp.IsSet(ProxyUpstreamTCPUserTimeoutSeconds) {
+		seconds, err := strconv.Atoi(vp.GetString(ProxyUpstreamTCPUserTimeoutSeconds))
+		if err != nil {
+			logging.Fatal(logger, fmt.Sprintf("%s must be an integer number of seconds", ProxyUpstreamTCPUserTimeoutSeconds))
+		}
+		c.ProxyUpstreamTCPUserTimeoutSeconds = seconds
+	}
 	if c.ProxyIdleTimeoutSeconds == 0 {
 		c.ProxyIdleTimeoutSeconds = DefaultProxyIdleTimeoutSeconds
 	}
@@ -507,6 +527,15 @@ func (c *OperatorConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	} else {
 		c.IPAMAutoCreateCiliumPodIPPools = m
 	}
+}
+
+// ValidateUpstreamTCPUserTimeout validates the timeout before converting seconds
+// to milliseconds for the Linux TCP_USER_TIMEOUT socket option.
+func (c *OperatorConfig) ValidateUpstreamTCPUserTimeout() error {
+	if c.ProxyUpstreamTCPUserTimeoutSeconds < 0 || c.ProxyUpstreamTCPUserTimeoutSeconds > MaxProxyUpstreamTCPUserTimeoutSeconds {
+		return fmt.Errorf("%s must be between 0 and %d seconds", ProxyUpstreamTCPUserTimeoutSeconds, MaxProxyUpstreamTCPUserTimeoutSeconds)
+	}
+	return nil
 }
 
 // Config represents the operator configuration.

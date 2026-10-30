@@ -219,6 +219,12 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	setGatewayAccepted(gw, true, "Gateway successfully scheduled", gatewayv1.GatewayReasonAccepted)
 
+	if err := ingestion.ApplyBackendTCPUserTimeouts(m, servicesList.Items); err != nil {
+		scopedLog.ErrorContext(ctx, "Invalid backend TCP user timeout", logfields.Error, err)
+		setGatewayProgrammed(gw, metav1.ConditionFalse, err.Error(), gatewayv1.GatewayReasonInvalid)
+		return r.handleReconcileErrorWithStatus(ctx, err, original, gw)
+	}
+
 	// Step 3: Translate the listeners into Cilium model
 	cec, svc, ep, err := r.translator.Translate(m)
 	if err != nil {

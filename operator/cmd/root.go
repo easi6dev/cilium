@@ -461,6 +461,9 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 
 	// Populate the operator config with the options from Viper
 	operatorOption.Config.Populate(logger, vp)
+	if err := operatorOption.Config.ValidateUpstreamTCPUserTimeout(); err != nil {
+		logging.Fatal(logger, err.Error())
+	}
 
 	// add hooks after setting up metrics in the option.Config
 	logging.AddHandlers(metrics.NewLoggingHook())

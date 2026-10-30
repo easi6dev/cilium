@@ -29,6 +29,11 @@ const (
 	// ServicePrefix is the common prefix for service related annotations.
 	ServicePrefix = "service.cilium.io"
 
+	// ServiceUpstreamTCPUserTimeout overrides the operator's TCP user timeout
+	// for HTTP upstream connections to this Service. The value is a Go duration;
+	// zero leaves the socket option unset even when the global default is enabled.
+	ServiceUpstreamTCPUserTimeout = ServicePrefix + "/upstream-tcp-user-timeout"
+
 	// IPAMPrefix is the common prefix for IPAM related annotations.
 	IPAMPrefix = "ipam.cilium.io"
 

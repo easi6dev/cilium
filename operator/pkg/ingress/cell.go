@@ -122,8 +122,9 @@ func registerReconciler(params ingressParams) error {
 			StreamIdleTimeoutSeconds: params.OperatorConfig.ProxyStreamIdleTimeoutSeconds,
 		},
 		ClusterConfig: translation.ClusterConfig{
-			IdleTimeoutSeconds: params.OperatorConfig.ProxyIdleTimeoutSeconds,
-			UseAppProtocol:     false,
+			IdleTimeoutSeconds:            params.OperatorConfig.ProxyIdleTimeoutSeconds,
+			UpstreamTCPUserTimeoutSeconds: params.OperatorConfig.ProxyUpstreamTCPUserTimeoutSeconds,
+			UseAppProtocol:                false,
 		},
 		RouteConfig: translation.RouteConfig{
 			HostNameSuffixMatch: false,

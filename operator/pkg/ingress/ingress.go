@@ -104,6 +104,8 @@ func (r *ingressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watching shared loadbalancer Service and reconcile all shared Cilium Ingresses.
 		// It's necessary to reconcile all shared Cilium Ingresses as they all have to potentially update their LoadBalancer status.
 		Watches(&corev1.Service{}, r.enqueueSharedCiliumIngresses(), r.forSharedLoadbalancerService()).
+		// Backend Service annotations configure the generated upstream clusters.
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.enqueueIngressesForBackendService), builder.WithPredicates(backendTCPUserTimeoutChanged())).
 		// Watching shared CiliumEnvoyConfig and reconcile a non-existing pseudo Cilium Ingress.
 		// Its not necessary to reconcile all shared Cilium Ingresses as they all will update the
 		// shared CEC with the complete model that includes all shared Cilium Ingresses.

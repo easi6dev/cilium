@@ -4,6 +4,7 @@
 package model
 
 import (
+	"iter"
 	"sort"
 	"strconv"
 	"strings"
@@ -485,9 +486,36 @@ type Backend struct {
 	// for the port of the Service.
 	AppProtocol *string `json:"app_protocol,omitempty"`
 
+	// TCPUserTimeout overrides the global HTTP upstream TCP user timeout.
+	// Nil inherits the global value; an explicit zero leaves the socket option unset.
+	TCPUserTimeout *time.Duration `json:"tcp_user_timeout,omitempty"`
+
 	// Weight specifies the percentage of traffic to send to this backend.
 	// This is computed as weight/(sum of all weights in backends) * 100.
 	Weight *int32 `json:"weight,omitempty"`
+}
+
+// HTTPBackends yields HTTP route and request-mirror backends, excluding TLS
+// passthrough backends. The returned pointers can be used to enrich the model
+// with configuration owned by the referenced backend Service.
+func (m *Model) HTTPBackends() iter.Seq[*Backend] {
+	return func(yield func(*Backend) bool) {
+		for li := range m.HTTP {
+			for ri := range m.HTTP[li].Routes {
+				route := &m.HTTP[li].Routes[ri]
+				for bi := range route.Backends {
+					if !yield(&route.Backends[bi]) {
+						return
+					}
+				}
+				for _, mirror := range route.RequestMirrors {
+					if mirror != nil && mirror.Backend != nil && !yield(mirror.Backend) {
+						return
+					}
+				}
+			}
+		}
+	}
 }
 
 // BackendPort holds the details of what port on the Service to connect to.
