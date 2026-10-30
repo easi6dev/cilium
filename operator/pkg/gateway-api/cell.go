@@ -275,8 +275,9 @@ func initGatewayAPIController(params gatewayAPIParams) error {
 			StreamIdleTimeoutSeconds: params.OperatorConfig.ProxyStreamIdleTimeoutSeconds,
 		},
 		ClusterConfig: translation.ClusterConfig{
-			IdleTimeoutSeconds: params.OperatorConfig.ProxyIdleTimeoutSeconds,
-			UseAppProtocol:     params.GatewayApiConfig.EnableGatewayAPIAppProtocol,
+			IdleTimeoutSeconds:            params.OperatorConfig.ProxyIdleTimeoutSeconds,
+			UpstreamTCPUserTimeoutSeconds: params.OperatorConfig.ProxyUpstreamTCPUserTimeoutSeconds,
+			UseAppProtocol:                params.GatewayApiConfig.EnableGatewayAPIAppProtocol,
 		},
 		RouteConfig: translation.RouteConfig{
 			HostNameSuffixMatch: true,

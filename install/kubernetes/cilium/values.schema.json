@@ -2813,6 +2813,11 @@
           },
           "type": "object"
         },
+        "upstreamTCPUserTimeoutSeconds": {
+          "maximum": 2147483,
+          "minimum": 0,
+          "type": "integer"
+        },
         "useOriginalSourceAddress": {
           "type": "boolean"
         },

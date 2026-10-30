@@ -68,9 +68,23 @@ func GenerateIndexerHTTPRouteByBackendService(c client.Client, logger *slog.Logg
 		var backendServices []string
 
 		for _, rule := range route.Spec.Rules {
+			var references []gatewayv1.BackendObjectReference
 			for _, backend := range rule.BackendRefs {
+				references = append(references, backend.BackendObjectReference)
+				for _, filter := range backend.Filters {
+					if filter.Type == gatewayv1.HTTPRouteFilterRequestMirror && filter.RequestMirror != nil {
+						references = append(references, filter.RequestMirror.BackendRef)
+					}
+				}
+			}
+			for _, filter := range rule.Filters {
+				if filter.Type == gatewayv1.HTTPRouteFilterRequestMirror && filter.RequestMirror != nil {
+					references = append(references, filter.RequestMirror.BackendRef)
+				}
+			}
+			for _, backend := range references {
 				namespace := helpers.NamespaceDerefOr(backend.Namespace, route.Namespace)
-				backendServiceName, err := helpers.GetBackendServiceName(c, namespace, backend.BackendObjectReference)
+				backendServiceName, err := helpers.GetBackendServiceName(c, namespace, backend)
 				if err != nil {
 					logger.Error("Failed to get backend service name",
 						logfields.LogSubsys, logfields.HTTPRoute,

@@ -6,6 +6,8 @@ package gateway_api
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,8 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -22,6 +27,7 @@ import (
 	"github.com/cilium/cilium/operator/pkg/gateway-api/helpers"
 	"github.com/cilium/cilium/operator/pkg/gateway-api/indexers"
 	"github.com/cilium/cilium/operator/pkg/model/translation"
+	"github.com/cilium/cilium/pkg/annotation"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 )
@@ -65,6 +71,10 @@ func (r *gammaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("gammaService").
 		// Watch its own resource
 		For(&corev1.Service{}).
+		// Backend Service annotations also affect their routes' parent Services.
+		// The shared backend indexes are registered by the Gateway reconciler.
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.enqueueForBackendService()),
+			builder.WithPredicates(backendTCPUserTimeoutChanged())).
 		// Watch HTTPRoute linked to Service
 		Watches(&gatewayv1.HTTPRoute{}, r.enqueueRequestForOwningHTTPRoute(r.logger)).
 		// Watch GRPCRoute linked to Service
@@ -105,6 +115,52 @@ func (r *gammaReconciler) enqueueRequestForOwningGRPCRoute(logger *slog.Logger) 
 
 func (r *gammaReconciler) enqueueRequestForReferenceGrant() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(r.enqueueAll())
+}
+
+// Service status updates must not trigger another traversal of backend routes.
+// Creates and deletes still reconcile parents because backend validity changes.
+func backendTCPUserTimeoutChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(event event.UpdateEvent) bool {
+			oldValue, oldSet := event.ObjectOld.GetAnnotations()[annotation.ServiceUpstreamTCPUserTimeout]
+			newValue, newSet := event.ObjectNew.GetAnnotations()[annotation.ServiceUpstreamTCPUserTimeout]
+			return oldSet != newSet || oldValue != newValue
+		},
+	}
+}
+
+// enqueueForBackendService maps a backend Service change to its GAMMA parents,
+// including routes that reference the Service only as a request mirror.
+func (r *gammaReconciler) enqueueForBackendService() handler.MapFunc {
+	return func(ctx context.Context, object client.Object) []reconcile.Request {
+		if _, ok := object.(*corev1.Service); !ok {
+			return nil
+		}
+		key := client.ObjectKeyFromObject(object).String()
+		httpRoutes := &gatewayv1.HTTPRouteList{}
+		if err := r.List(ctx, httpRoutes, client.MatchingFields{backendServiceHTTPRouteIndex: key}); err != nil {
+			r.logger.ErrorContext(ctx, "Unable to list HTTPRoutes for backend Service", logfields.Error, err)
+			return nil
+		}
+		grpcRoutes := &gatewayv1.GRPCRouteList{}
+		if err := r.List(ctx, grpcRoutes, client.MatchingFields{backendServiceGRPCRouteIndex: key}); err != nil {
+			r.logger.ErrorContext(ctx, "Unable to list GRPCRoutes for backend Service", logfields.Error, err)
+			return nil
+		}
+
+		requests := map[reconcile.Request]struct{}{}
+		for _, route := range httpRoutes.Items {
+			for _, request := range getGammaReconcileRequestsForRoute(ctx, r.Client, &route, route.Spec.CommonRouteSpec, r.logger, helpers.HTTPRouteKind) {
+				requests[request] = struct{}{}
+			}
+		}
+		for _, route := range grpcRoutes.Items {
+			for _, request := range getGammaReconcileRequestsForRoute(ctx, r.Client, &route, route.Spec.CommonRouteSpec, r.logger, helpers.GRPCRouteKind) {
+				requests[request] = struct{}{}
+			}
+		}
+		return slices.Collect(maps.Keys(requests))
+	}
 }
 
 func (r *gammaReconciler) enqueueAll() handler.MapFunc {
@@ -148,7 +204,7 @@ func getGammaReconcileRequestsForRoute(ctx context.Context, c client.Client, obj
 	)
 
 	for _, parent := range route.ParentRefs {
-		if helpers.IsGateway(parent) {
+		if !helpers.IsGammaService(parent) {
 			continue
 		}
 

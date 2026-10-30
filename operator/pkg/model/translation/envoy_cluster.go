@@ -6,6 +6,7 @@ package translation
 import (
 	"fmt"
 	goslices "slices"
+	"time"
 
 	envoy_config_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_config_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -59,6 +60,10 @@ func (i *cecTranslator) tcpClusterMutators(mutationFunc ...ClusterMutator) []Clu
 }
 
 func (i *cecTranslator) desiredEnvoyCluster(m *model.Model) ([]ciliumv2.XDSResource, error) {
+	timeouts, err := i.backendTCPUserTimeouts(m)
+	if err != nil {
+		return nil, err
+	}
 	envoyClusters := map[string]ciliumv2.XDSResource{}
 	var sortedClusterNames []string
 
@@ -68,9 +73,12 @@ func (i *cecTranslator) desiredEnvoyCluster(m *model.Model) ([]ciliumv2.XDSResou
 				clusterName := getClusterName(ns, name, port)
 				clusterServiceName := getClusterServiceName(ns, name, port)
 				sortedClusterNames = append(sortedClusterNames, clusterName)
-				envoyClusters[clusterName], _ = i.httpCluster(clusterName, clusterServiceName,
+				envoyClusters[clusterName], err = i.httpCluster(clusterName, clusterServiceName,
 					isGRPCService(m, ns, name, port),
-					getAppProtocol(m, ns, name, port))
+					getAppProtocol(m, ns, name, port), timeouts[clusterName])
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -79,14 +87,24 @@ func (i *cecTranslator) desiredEnvoyCluster(m *model.Model) ([]ciliumv2.XDSResou
 		for name, ports := range v {
 			for _, port := range ports {
 				clusterName := getClusterName(ns, name, port)
+				// The existing naming scheme shares this cluster between HTTP
+				// and passthrough routes. Do not silently discard the HTTP timeout
+				// or apply it to TLS passthrough connections outside its scope.
+				if timeouts[clusterName] > 0 {
+					return nil, fmt.Errorf("cluster %s is shared by HTTP and TLS passthrough routes; disable its TCP user timeout or use separate backend Services", clusterName)
+				}
 				clusterServiceName := getClusterServiceName(ns, name, port)
 				sortedClusterNames = append(sortedClusterNames, clusterName)
-				envoyClusters[clusterName], _ = i.tcpCluster(clusterName, clusterServiceName)
+				envoyClusters[clusterName], err = i.tcpCluster(clusterName, clusterServiceName)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 
 	goslices.Sort(sortedClusterNames)
+	sortedClusterNames = goslices.Compact(sortedClusterNames)
 	res := make([]ciliumv2.XDSResource, len(sortedClusterNames))
 	for i, name := range sortedClusterNames {
 		res[i] = envoyClusters[name]
@@ -96,7 +114,10 @@ func (i *cecTranslator) desiredEnvoyCluster(m *model.Model) ([]ciliumv2.XDSResou
 }
 
 // httpCluster creates a new Envoy cluster.
-func (i *cecTranslator) httpCluster(clusterName string, clusterServiceName string, isGRPCService bool, appProtocol string) (ciliumv2.XDSResource, error) {
+func (i *cecTranslator) httpCluster(clusterName string, clusterServiceName string, isGRPCService bool, appProtocol string, tcpUserTimeout time.Duration) (ciliumv2.XDSResource, error) {
+	if err := model.ValidateTCPUserTimeout(tcpUserTimeout); err != nil {
+		return ciliumv2.XDSResource{}, fmt.Errorf("cluster %s: %w", clusterName, err)
+	}
 	cluster := &envoy_config_cluster_v3.Cluster{
 		Name: clusterName,
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
@@ -120,8 +141,36 @@ func (i *cecTranslator) httpCluster(clusterName string, clusterServiceName strin
 	for _, fn := range i.clusterMutators(isGRPCService, appProtocol) {
 		cluster = fn(cluster)
 	}
+	cluster = withTCPUserTimeout(tcpUserTimeout.Milliseconds())(cluster)
 
 	return toXdsResource(cluster, envoy.ClusterTypeURL)
+}
+
+func (i *cecTranslator) backendTCPUserTimeouts(m *model.Model) (map[string]time.Duration, error) {
+	seconds := i.Config.ClusterConfig.UpstreamTCPUserTimeoutSeconds
+	if seconds < 0 || int64(seconds) > int64(model.MaxTCPUserTimeout/time.Second) {
+		return nil, fmt.Errorf("upstream TCP user timeout seconds must be between 0 and %d", model.MaxTCPUserTimeout/time.Second)
+	}
+	defaultTimeout := time.Duration(seconds) * time.Second
+	timeouts := make(map[string]time.Duration)
+	for backend := range m.HTTPBackends() {
+		if backend.Port == nil {
+			continue
+		}
+		name := getClusterName(backend.Namespace, backend.Name, backend.Port.GetPort())
+		timeout := defaultTimeout
+		if backend.TCPUserTimeout != nil {
+			timeout = *backend.TCPUserTimeout
+		}
+		if err := model.ValidateTCPUserTimeout(timeout); err != nil {
+			return nil, fmt.Errorf("cluster %s: %w", name, err)
+		}
+		if previous, exists := timeouts[name]; exists && previous != timeout {
+			return nil, fmt.Errorf("cluster %s has conflicting upstream TCP user timeouts", name)
+		}
+		timeouts[name] = timeout
+	}
+	return timeouts, nil
 }
 
 // tcpCluster same as NewTCPCluster but has default mutation functions applied.

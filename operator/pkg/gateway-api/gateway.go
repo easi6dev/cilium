@@ -270,11 +270,13 @@ func (r *gatewayReconciler) enqueueRequestForBackendService() handler.EventHandl
 		// Then, fetch all TLSRoutes that reference this service, using the backendServiceIndex
 		tlsrList := &gatewayv1alpha2.TLSRouteList{}
 
-		if err := r.Client.List(ctx, tlsrList, &client.ListOptions{
-			FieldSelector: fields.OneTermEqualSelector(backendServiceTLSRouteIndex, client.ObjectKeyFromObject(o).String()),
-		}); err != nil {
-			scopedLog.Error("Failed to get related HTTPRoutes", logfields.Error, err)
-			return []reconcile.Request{}
+		if helpers.HasTLSRouteSupport(r.Client.Scheme()) {
+			if err := r.Client.List(ctx, tlsrList, &client.ListOptions{
+				FieldSelector: fields.OneTermEqualSelector(backendServiceTLSRouteIndex, client.ObjectKeyFromObject(o).String()),
+			}); err != nil {
+				scopedLog.Error("Failed to get related TLSRoutes", logfields.Error, err)
+				return []reconcile.Request{}
+			}
 		}
 
 		grpcRouteList := &gatewayv1.GRPCRouteList{}

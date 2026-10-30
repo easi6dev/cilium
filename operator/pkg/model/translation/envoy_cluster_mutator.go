@@ -13,6 +13,13 @@ import (
 
 type ClusterMutator func(*envoy_config_cluster_v3.Cluster) *envoy_config_cluster_v3.Cluster
 
+// Linux UAPI values: these configure Envoy's Linux sockets even when the
+// operator or its unit tests are built on another operating system.
+const (
+	tcpSocketOptionLevel       = 6  // IPPROTO_TCP
+	tcpUserTimeoutSocketOption = 18 // TCP_USER_TIMEOUT
+)
+
 // withClusterLbPolicy sets the cluster's load balancing policy.
 // https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers
 func withClusterLbPolicy(lbPolicy int32) ClusterMutator {
@@ -45,6 +52,44 @@ func withConnectionTimeout(seconds int) ClusterMutator {
 			return cluster
 		}
 		cluster.ConnectTimeout = &durationpb.Duration{Seconds: int64(seconds)}
+		return cluster
+	}
+}
+
+// withTCPUserTimeout bounds how long an upstream TCP socket may keep
+// unacknowledged data before the kernel closes it. TCP_USER_TIMEOUT is a Linux
+// socket option whose value is expressed in milliseconds.
+func withTCPUserTimeout(milliseconds int64) ClusterMutator {
+	return func(cluster *envoy_config_cluster_v3.Cluster) *envoy_config_cluster_v3.Cluster {
+		if cluster == nil || milliseconds <= 0 {
+			return cluster
+		}
+
+		if cluster.UpstreamBindConfig == nil {
+			cluster.UpstreamBindConfig = &envoy_config_core_v3.BindConfig{}
+		}
+		option := &envoy_config_core_v3.SocketOption{
+			Description: "TCP_USER_TIMEOUT for stalled upstream connections",
+			Level:       tcpSocketOptionLevel,
+			Name:        tcpUserTimeoutSocketOption,
+			Value: &envoy_config_core_v3.SocketOption_IntValue{
+				IntValue: milliseconds,
+			},
+			State: envoy_config_core_v3.SocketOption_STATE_PREBIND,
+			Type: &envoy_config_core_v3.SocketOption_SocketType{
+				Stream: &envoy_config_core_v3.SocketOption_SocketType_Stream{},
+			},
+		}
+		// Replace this option rather than appending duplicate PREBIND settings.
+		options := cluster.UpstreamBindConfig.SocketOptions[:0]
+		for _, existing := range cluster.UpstreamBindConfig.SocketOptions {
+			if existing.GetLevel() == tcpSocketOptionLevel && existing.GetName() == tcpUserTimeoutSocketOption && existing.GetState() == envoy_config_core_v3.SocketOption_STATE_PREBIND {
+				continue
+			}
+			options = append(options, existing)
+		}
+		cluster.UpstreamBindConfig.SocketOptions = append(options, option)
+
 		return cluster
 	}
 }

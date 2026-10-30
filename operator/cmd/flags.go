@@ -85,6 +85,10 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.Bool(operatorOption.EnableMetrics, false, "Enable Prometheus metrics")
 	option.BindEnv(vp, operatorOption.EnableMetrics)
 
+	flags.Int(operatorOption.ProxyUpstreamTCPUserTimeoutSeconds, 0,
+		"TCP user timeout in seconds for HTTP upstream connections generated for Gateway API, GAMMA, and Ingress (0 disables; maximum 2147483)")
+	option.BindEnv(vp, operatorOption.ProxyUpstreamTCPUserTimeoutSeconds)
+
 	// Logging flags
 	flags.StringSlice(option.LogDriver, []string{}, "Logging endpoints to use for example syslog")
 	option.BindEnv(vp, option.LogDriver)

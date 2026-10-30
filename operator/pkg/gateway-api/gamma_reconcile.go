@@ -137,7 +137,14 @@ func (r *gammaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	setGammaServiceAccepted(svc, true, "Gamma Service has routes attached", CiliumGammaReasonAccepted)
 
-	cec, _, cep, err := r.translator.Translate(&model.Model{HTTP: httpListeners})
+	m := &model.Model{HTTP: httpListeners}
+	if err := ingestion.ApplyBackendTCPUserTimeouts(m, servicesList.Items); err != nil {
+		scopedLog.ErrorContext(ctx, "Invalid backend TCP user timeout", logfields.Error, err)
+		setGammaServiceProgrammed(svc, false, err.Error(), "InvalidBackendConfiguration")
+		return r.handleReconcileErrorWithStatus(ctx, err, originalSvc, svc)
+	}
+
+	cec, _, cep, err := r.translator.Translate(m)
 	if err != nil {
 		scopedLog.ErrorContext(ctx, "Unable to translate resources", logfields.Error, err)
 		return r.handleReconcileErrorWithStatus(ctx, err, originalSvc, svc)

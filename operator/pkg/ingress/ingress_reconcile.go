@@ -227,7 +227,13 @@ func (r *ingressReconciler) buildSharedResources(ctx context.Context) (*ciliumv2
 			m.HTTP = append(m.HTTP, ingestion.Ingress(r.logger, item, r.defaultSecretNamespace, r.defaultSecretName, r.enforcedHTTPS, insecureHTTPPort, secureHTTPPort, r.defaultRequestTimeout)...)
 		}
 	}
+	if err := r.applyBackendTCPUserTimeouts(ctx, m); err != nil {
+		return nil, err
+	}
 	cec, err := r.cecTranslator.Translate(r.ciliumNamespace, r.sharedResourcesName, m)
+	if err != nil {
+		return nil, err
+	}
 	if len(cec.Spec.Services) > 0 {
 		cec.Spec.Services[0].Ports = append(cec.Spec.Services[0].Ports, 443)
 	}
@@ -255,6 +261,9 @@ func (r *ingressReconciler) buildDedicatedResources(ctx context.Context, ingress
 		m.TLSPassthrough = append(m.TLSPassthrough, ingestion.IngressPassthrough(scopedLog, *ingress, passthroughPort)...)
 	} else {
 		m.HTTP = append(m.HTTP, ingestion.Ingress(scopedLog, *ingress, r.defaultSecretNamespace, r.defaultSecretName, r.enforcedHTTPS, insecureHTTPPort, secureHTTPPort, r.defaultRequestTimeout)...)
+	}
+	if err := r.applyBackendTCPUserTimeouts(ctx, m); err != nil {
+		return nil, nil, nil, err
 	}
 
 	cec, svc, ep, err := r.dedicatedTranslator.Translate(m)
